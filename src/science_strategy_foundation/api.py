@@ -9,12 +9,76 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .errors import DomainError, ValidationError
+from .governance import GovernanceService
 from .service import DomainService
 from .storage import Database
 
 
+GOVERNANCE_POST_ROUTES = {
+    "/governance/charters": "create_charter",
+    "/governance/members": "register_member",
+    "/governance/member-withdrawals": "withdraw_member",
+    "/governance/member-weights": "update_weight",
+    "/governance/commitments": "record_commitment",
+    "/governance/contributions": "record_contribution",
+    "/governance/instruments": "register_instrument",
+    "/governance/instrument-slots": "schedule_slot",
+    "/governance/slot-completions": "complete_slot",
+    "/governance/slot-cancellations": "cancel_slot",
+    "/governance/datasets": "register_dataset",
+    "/governance/dataset-versions": "publish_version",
+    "/governance/dataset-corrections": "correct_dataset",
+    "/governance/version-suspensions": "suspend_version",
+    "/governance/proposals": "submit_proposal",
+    "/governance/resolutions": "open_resolution",
+    "/governance/votes": "cast_vote",
+    "/governance/resolution-closures": "close_resolution",
+    "/governance/conflicts": "declare_conflict",
+    "/governance/license-suspensions": "suspend_license",
+    "/governance/license-resumptions": "resume_license",
+    "/governance/downloads": "record_download",
+    "/governance/publications": "register_publication",
+}
+
+GOVERNANCE_GET_ROUTES = {
+    "/governance/proposal": ("get_proposal", ["proposal_id"]),
+    "/governance/license": ("get_license", ["license_id"]),
+    "/governance/resolution": ("get_resolution", ["resolution_id"]),
+    "/governance/access": ("explain_access", ["member_id", "dataset_id"]),
+    "/governance/member-standing": ("member_standing", ["member_id"]),
+    "/governance/dataset-usage": ("dataset_usage", ["dataset_id"]),
+}
+
+
+def _route_governance(governance: GovernanceService, method: str, parsed,
+                      body: dict[str, Any], actor_id: str) -> tuple[int, dict[str, Any]] | None:
+    """把 /governance/ 前缀的请求分派到治理服务。"""
+
+    if method == "POST":
+        name = GOVERNANCE_POST_ROUTES.get(parsed.path)
+        if name is None:
+            return None
+        result = getattr(governance, name)(actor_id=actor_id, **body)
+        return (200 if result.get("replayed") else 201), result
+    if method == "GET":
+        spec = GOVERNANCE_GET_ROUTES.get(parsed.path)
+        if spec is None:
+            return None
+        query = parse_qs(parsed.query)
+        params: dict[str, str] = {}
+        for key in spec[1]:
+            value = query.get(key, [""])[0]
+            if not value:
+                raise ValidationError(f"{key} 不能为空")
+            params[key] = value
+        result = getattr(governance, spec[0])(actor_id=actor_id, **params)
+        return 200, result
+    return None
+
+
 def route(service: DomainService, method: str, path: str, body: dict[str, Any] | None,
-          headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
+          headers: dict[str, str] | None = None,
+          governance: GovernanceService | None = None) -> tuple[int, dict[str, Any]]:
     """把一个 HTTP 语义请求分派到领域服务。"""
 
     headers = headers or {}
@@ -25,6 +89,12 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
         if method == "GET" and parsed.path == "/health":
             valid, count = service.verify_audit()
             return 200, {"status": "ok", "audit_valid": valid, "audit_events": count}
+        if parsed.path.startswith("/governance/"):
+            if governance is not None:
+                handled = _route_governance(governance, method, parsed, body, actor_id)
+                if handled is not None:
+                    return handled
+            return 404, {"error": "route_not_found", "message": "接口不存在"}
         if method == "POST" and parsed.path == "/organizations":
             receipt = service.register_organization(actor_id=actor_id, **body)
             return 200 if receipt.replayed else 201, receipt.__dict__
@@ -59,6 +129,7 @@ class Handler(BaseHTTPRequestHandler):
     """把标准库 HTTP 请求转换为路由调用。"""
 
     service: DomainService
+    governance: GovernanceService | None = None
 
     def _handle(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -69,7 +140,8 @@ class Handler(BaseHTTPRequestHandler):
             self._write(400, {"error": "invalid_json", "message": "请求体必须是 UTF-8 JSON"})
             return
         status, payload = route(self.service, self.command, self.path, body,
-                                {"X-Actor-Id": self.headers.get("X-Actor-Id", "")})
+                                {"X-Actor-Id": self.headers.get("X-Actor-Id", "")},
+                                governance=self.governance)
         self._write(status, payload)
 
     def _write(self, status: int, payload: dict[str, Any]) -> None:
@@ -100,6 +172,7 @@ def main() -> int:
     args = parser.parse_args()
     database = Database(args.database)
     Handler.service = DomainService(database)
+    Handler.governance = GovernanceService(database)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         server.serve_forever()

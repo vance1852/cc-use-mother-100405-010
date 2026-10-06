@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 
@@ -34,3 +34,29 @@ class FixedClock:
         """返回固定的 UTC 时间。"""
 
         return self._value
+
+
+class MutableClock:
+    """允许测试与离线验收随场景推进时间的时钟。"""
+
+    def __init__(self, value: datetime) -> None:
+        if value.tzinfo is None:
+            raise ValueError("起始时间必须包含时区")
+        self._value = value.astimezone(timezone.utc)
+
+    def now(self) -> datetime:
+        """返回当前设定的 UTC 时间。"""
+
+        return self._value
+
+    def set(self, value: datetime) -> None:
+        """把时钟设定到新的时刻。"""
+
+        if value.tzinfo is None:
+            raise ValueError("设定时间必须包含时区")
+        self._value = value.astimezone(timezone.utc)
+
+    def advance(self, **kwargs: float) -> None:
+        """按 timedelta 参数向前推进时钟。"""
+
+        self._value = self._value + timedelta(**kwargs)
