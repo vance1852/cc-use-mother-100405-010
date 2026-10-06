@@ -16,7 +16,7 @@ from .storage import Database
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{1,63}$")
-ROLES = frozenset({"admin", "operator", "reviewer", "auditor"})
+ROLES = frozenset({"admin", "operator", "reviewer", "auditor", "secretariat"})
 
 
 class DomainService:
@@ -108,7 +108,7 @@ class DomainService:
             count = connection.execute("SELECT COUNT(*) AS count FROM actors").fetchone()["count"]
             if count:
                 actor = self._actor(connection, actor_id)
-                self._require(actor, "admin")
+                self._require(actor, "admin", "secretariat")
             elif actor_id != "bootstrap":
                 raise PermissionDenied("首位管理员必须由 bootstrap 创建")
             new_actor_id = self._identifier(new_actor_id, "new_actor_id")

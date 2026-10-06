@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 
@@ -34,3 +34,15 @@ class FixedClock:
         """返回固定的 UTC 时间。"""
 
         return self._value
+
+    def set(self, value: datetime) -> None:
+        """把固定时钟拨到新的时刻。"""
+
+        if value.tzinfo is None:
+            raise ValueError("固定时间必须包含时区")
+        self._value = value.astimezone(timezone.utc)
+
+    def advance(self, delta: timedelta) -> None:
+        """把固定时钟向前推进一段时长。"""
+
+        self._value = self._value + delta
